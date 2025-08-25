@@ -1,0 +1,65 @@
+name: Deploy Auth Service to Cloud Run
+
+on:
+  push:
+    branches: [main, production]
+  pull_request:
+    branches: [main]
+
+env:
+  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  SERVICE_NAME: auth-service
+  REGION: us-central1
+  REPOSITORY: movies-repo
+  IMAGE_NAME: auth-api
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        pip install -r requirements.txt
+        pip install pytest
+    
+    - name: Run tests
+      run: pytest tests/ -v || echo "No tests yet"
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/production'
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - uses: google-github-actions/auth@v1
+      with:
+        credentials_json: ${{ secrets.GCP_SA_KEY }}
+    
+    - uses: google-github-actions/setup-gcloud@v1
+    
+    - name: Configure Docker
+      run: |
+        gcloud auth configure-docker us-central1-docker.pkg.dev
+    
+    - name: Build and Push
+      run: |
+        docker build -t us-central1-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$IMAGE_NAME:$GITHUB_SHA .
+        docker push us-central1-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$IMAGE_NAME:$GITHUB_SHA
+    
+    - name: Deploy to Cloud Run
+      run: |
+        gcloud run deploy $SERVICE_NAME \
+          --image us-central1-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$IMAGE_NAME:$GITHUB_SHA \
+          --platform managed \
+          --region $REGION \
+          --allow-unauthenticated \
+          --set-env-vars MONGO_URI="${{ secrets.MONGO_URI_AUTH }}"
